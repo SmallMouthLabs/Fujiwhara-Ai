@@ -78,14 +78,15 @@ debate-tool/
 ## Current status
 
 Design is complete and captured in `docs/`. Language/interface are settled (Python, CLI first;
-see `docs/DECISIONS.md` D9-D13). Milestone 1 (provider adapters) is done:
-`src/debate_tool/providers/` with tests. Nothing else is built yet.
+see `docs/DECISIONS.md` D9-D13). Milestones 1-2 are done: `src/debate_tool/providers/` and
+`src/debate_tool/state.py`, both with tests. Nothing else is built yet.
 
 ## Suggested first milestones
 
 1. ~~Provider adapters for Anthropic and OpenAI behind one common interface.~~ Done
    (`src/debate_tool/providers/`).
-2. A per-seat state store that keeps each model's conversation history genuinely separate.
+2. ~~A per-seat state store that keeps each model's conversation history genuinely
+   separate.~~ Done (`src/debate_tool/state.py`).
 3. The core loop: user seed, independent takes (hidden from each other), reveal, cross-critique
    rounds with the uptake rule enforced, then the disagreement map.
 4. Config-driven personas for the two anchor seats plus the conductor.
