@@ -78,8 +78,9 @@ debate-tool/
 ## Current status
 
 Design is complete and captured in `docs/`. Language/interface are settled (Python, CLI first;
-see `docs/DECISIONS.md` D9-D13). Milestones 1-2 are done: `src/debate_tool/providers/` and
-`src/debate_tool/state.py`, both with tests. Nothing else is built yet.
+see `docs/DECISIONS.md` D9-D13). Milestones 1-3 are done: `src/debate_tool/providers/`,
+`src/debate_tool/state.py`, and `src/debate_tool/engine/` (the core loop), all with tests.
+No CLI yet, so the engine isn't runnable end to end from the terminal (milestone 6).
 
 ## Suggested first milestones
 
@@ -87,8 +88,14 @@ see `docs/DECISIONS.md` D9-D13). Milestones 1-2 are done: `src/debate_tool/provi
    (`src/debate_tool/providers/`).
 2. ~~A per-seat state store that keeps each model's conversation history genuinely
    separate.~~ Done (`src/debate_tool/state.py`).
-3. The core loop: user seed, independent takes (hidden from each other), reveal, cross-critique
-   rounds with the uptake rule enforced, then the disagreement map.
+3. ~~The core loop: user seed, independent takes (hidden from each other), reveal,
+   cross-critique rounds with the uptake rule enforced, then the disagreement map.~~
+   Done (`src/debate_tool/engine/`: `session.py` is the loop, `uptake.py`/`reframe.py`
+   are the prompt contracts, `conductor.py`/`map.py` build the disagreement map).
+   `SeatConfig` (`seats.py`) is a code-level stand-in for real persona config until
+   milestone 4 lands. User interjection and real reframe-choice UI are stubbed as
+   extension points (`choose_framing` callback; the loop's stepwise methods) for
+   milestone 6 to drive, not yet wired to any actual terminal input.
 4. Config-driven personas for the two anchor seats plus the conductor.
 5. The move and hook interface, stubbed, with no technique modules implemented yet.
 6. A minimal interface (CLI first) that runs a full session end to end.
