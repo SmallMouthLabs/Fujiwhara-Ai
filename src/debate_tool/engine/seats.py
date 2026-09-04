@@ -1,9 +1,10 @@
-"""The minimal, code-level shape a seat needs to actually run.
+"""The shape a seat needs to actually run.
 
-`SeatConfig` is deliberately not loaded from a config file yet: that's milestone 4
-(config-driven personas). The loop below only depends on this shape, so milestone 4
-just has to produce `SeatConfig` instances from YAML/JSON instead of Python literals;
-nothing in the loop itself changes.
+As of milestone 4, `SeatConfig` instances are produced from `config/personas/*.yaml`
+by `debate_tool.persona_config`, not written as Python literals (except in tests,
+where a literal is still the simplest way to script a scenario). Nothing in the loop
+(session.py) changes based on where a `SeatConfig` came from; that's the whole point
+of the seam milestone 3 built.
 """
 
 from __future__ import annotations
@@ -17,5 +18,8 @@ class SeatConfig:
     provider: str  # "anthropic" | "openai" (or whatever providers.get_adapter knows)
     model: str  # exact model id; never defaulted in code, see docs/DECISIONS.md D11
     system_prompt: str
+    role: str = ""  # free-form label ("skeptic", "generator", ...); descriptive, not read by the engine
+    disposition: str = ""  # free-form, descriptive only, e.g. "Critical, reasoned"
+    moves: tuple[str, ...] = ()  # move names this seat may use; empty until milestone 5 implements moves
     max_tokens: int = 1024
     temperature: float | None = None
