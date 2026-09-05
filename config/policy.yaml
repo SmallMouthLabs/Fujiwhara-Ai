@@ -1,0 +1,18 @@
+# The intervention policy: which move(s), if any, respond to each conductor hook.
+# See docs/DESIGN.md section 6 and docs/DECISIONS.md D8. The move library
+# (config/moves/) is empty by design: no technique modules are implemented yet.
+# Every hook below is listed with nothing mapped to it, so the vocabulary is
+# visible even while nothing responds; add move names here once config/moves/
+# actually has files, and src/debate_tool/intervention/policy.py's load_policy
+# validates each one against the loaded move registry.
+#
+# Not covered by this file yet: phase sequence, oscillation rhythm, and stop
+# conditions (config/README.md's other policy.* concerns). Those are still
+# hardcoded in engine/session.py; making them config-driven is a bigger change
+# than this milestone (5, the move/hook interface) and hasn't been scoped.
+
+hooks:
+  on_user_stall: []
+  on_early_narrowing: []
+  on_false_consensus: []
+  on_phase_change: []

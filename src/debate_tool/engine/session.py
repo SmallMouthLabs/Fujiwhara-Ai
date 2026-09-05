@@ -11,6 +11,17 @@ reframe (section 3) are both real MVP requirements but real human interaction, s
 both are exposed as extension points here (`choose_framing` on `run_reframe`; the
 round-by-round structure of `run` itself, callable stepwise) for milestone 6's CLI
 to drive, rather than guessed at without a consumer.
+
+The engine stays technique-agnostic (CLAUDE.md principle 1): the only thing it
+knows about the intervention layer is the `Hook` vocabulary and an optional
+`InterventionPolicy` to fire hooks against. Three of the four hooks fire on
+signals the engine already has: `ON_PHASE_CHANGE` on every phase transition
+(certain, since phases always alternate), `ON_EARLY_NARROWING` when a turn's
+target repeats one already raised, and `ON_FALSE_CONSENSUS` when a round has no
+rebuttal at all. `ON_USER_STALL` is defined but never fired here: it's about the
+human user stalling, which needs real terminal I/O that doesn't exist until
+milestone 6. `policy=None` (the default) skips all of this, so a session behaves
+exactly as it did before this existed.
 """
 
 from __future__ import annotations
@@ -18,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from ..intervention import Hook, HookEvent, InterventionPolicy, MoveContext
 from ..providers import get_adapter
 from ..providers.base import Message, ProviderAdapter
 from ..state import SeatStore
@@ -25,7 +37,7 @@ from .conductor import DisagreementMap, StallJudgment, build_disagreement_map, c
 from .map import build_skeleton
 from .reframe import REFRAME_PROMPT, parse_framings
 from .seats import SeatConfig
-from .turns import Phase, Turn
+from .turns import Phase, Stance, Turn
 from .uptake import CORRECTIVE_NUDGE, UPTAKE_FORMAT_INSTRUCTIONS, parse_uptake
 
 PHASE_INSTRUCTIONS: dict[Phase, str] = {
@@ -48,6 +60,7 @@ class DebateResult:
     rounds_run: int
     stop_reason: str  # "stalled" | "max_rounds"
     stall_judgments: list[StallJudgment]
+    hook_events: list[HookEvent]
 
 
 class DebateSession:
@@ -59,12 +72,14 @@ class DebateSession:
         reframer: SeatConfig | None = None,
         max_rounds: int = 8,
         adapters: dict[str, ProviderAdapter] | None = None,
+        policy: InterventionPolicy | None = None,
     ) -> None:
         self.seed = seed
         self.debater_a, self.debater_b = debaters
         self.conductor = conductor
         self.reframer = reframer
         self.max_rounds = max_rounds
+        self.policy = policy
 
         self.store = SeatStore()
         self.store.register(self.debater_a.seat_id)
@@ -72,6 +87,7 @@ class DebateSession:
 
         self.transcript: list[Turn] = []
         self.stall_judgments: list[StallJudgment] = []
+        self.hook_events: list[HookEvent] = []
 
         self._adapters: dict[str, ProviderAdapter] = dict(adapters or {})
 
@@ -101,6 +117,25 @@ class DebateSession:
             if turn.seat_id == seat_id and turn.round_index == round_index:
                 return turn
         raise LookupError(f"no turn for seat {seat_id!r} at round {round_index}")
+
+    # --- hooks (see this module's docstring for what fires and why) --------------
+
+    def _fire(self, hook: Hook, round_index: int, prior_targets: list[str]) -> None:
+        if self.policy is None:
+            return
+        context = MoveContext(seed=self.seed, seat_id="", recent_targets=tuple(prior_targets))
+        self.hook_events.append(self.policy.fire(hook, context, round_index))
+
+    def _fire_round_hooks(self, turns: tuple[Turn, Turn], round_index: int, prior_targets: list[str]) -> None:
+        """`prior_targets` here is the list as of *before* this round's own
+        targets are added, since "does this repeat something earlier" only makes
+        sense against what came before it."""
+        seen = {t.strip().lower() for t in prior_targets}
+        if any(t.target and t.target.strip().lower() in seen for t in turns):
+            self._fire(Hook.ON_EARLY_NARROWING, round_index, prior_targets)
+
+        if not any(t.stance is Stance.REBUT for t in turns):
+            self._fire(Hook.ON_FALSE_CONSENSUS, round_index, prior_targets)
 
     # --- reframe (optional) -------------------------------------------------------
 
@@ -212,6 +247,7 @@ class DebateSession:
 
         while round_index <= self.max_rounds:
             turns = self.run_round(round_index, phase)
+            self._fire_round_hooks(turns, round_index, prior_targets)
 
             judgment = check_stalled(self._adapter_for(self.conductor), self.conductor, list(turns), prior_targets)
             self.stall_judgments.append(judgment)
@@ -223,6 +259,9 @@ class DebateSession:
 
             round_index += 1
             phase = phase.next()
+            if round_index <= self.max_rounds:
+                # Don't announce a phase change for a round that won't actually run.
+                self._fire(Hook.ON_PHASE_CHANGE, round_index, prior_targets)
 
         return DebateResult(
             transcript=list(self.transcript),
@@ -230,4 +269,5 @@ class DebateSession:
             rounds_run=min(round_index, self.max_rounds),
             stop_reason=stop_reason,
             stall_judgments=list(self.stall_judgments),
+            hook_events=list(self.hook_events),
         )

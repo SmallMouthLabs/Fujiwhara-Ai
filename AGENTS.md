@@ -78,11 +78,11 @@ debate-tool/
 ## Current status
 
 Design is complete and captured in `docs/`. Language/interface are settled (Python, CLI first;
-see `docs/DECISIONS.md` D9-D13). Milestones 1-4 are done: `src/debate_tool/providers/`,
-`src/debate_tool/state.py`, `src/debate_tool/engine/` (the core loop), and
-`src/debate_tool/persona_config.py` plus `config/personas/*.yaml` (real personas for both
-anchor debaters, the conductor, and the reframer), all with tests. No CLI yet, so the engine
-isn't runnable end to end from the terminal (milestone 6).
+see `docs/DECISIONS.md` D9-D13). Milestones 1-5 are done: `src/debate_tool/providers/`,
+`src/debate_tool/state.py`, `src/debate_tool/engine/` (the core loop), `persona_config.py` plus
+`config/personas/*.yaml`, and `src/debate_tool/intervention/` plus `config/moves/` (empty by
+design) and `config/policy.yaml` (the move/hook interface), all with tests. No CLI yet, so the
+engine isn't runnable end to end from the terminal (milestone 6).
 
 ## Suggested first milestones
 
@@ -102,7 +102,15 @@ isn't runnable end to end from the terminal (milestone 6).
    `SeatConfig`; `load_persona_set` assembles them by role into what `DebateSession`
    needs directly). `SeatConfig.moves` and `.disposition` exist on every persona
    already, ready for milestone 5, but are inert until the move library exists.
-5. The move and hook interface, stubbed, with no technique modules implemented yet.
+5. ~~The move and hook interface, stubbed, with no technique modules implemented yet.~~
+   Done (`src/debate_tool/intervention/`: `Move` is config, not code, a name +
+   when-to-use note + prompt template, loaded from `config/moves/*.yaml` the same way
+   a persona loads; `Hook`/`InterventionPolicy` resolve a hook to whichever moves a
+   policy maps to it). `DebateSession` fires 3 of the 4 hooks on signals it already
+   has (`on_phase_change` every transition, `on_early_narrowing` when a turn's
+   target repeats, `on_false_consensus` when a round has no rebuttal); `on_user_stall`
+   is defined but unfired, since it needs real terminal I/O from milestone 6.
+   `config/moves/` and `config/policy.yaml` ship empty/unmapped, per D8.
 6. A minimal interface (CLI first) that runs a full session end to end.
 
 Defer until the core works: the technique modules (SCAMPER and friends), adaptive intervention

@@ -3,6 +3,7 @@ from __future__ import annotations
 from conftest import FakeAdapter
 
 from debate_tool.engine import DebateSession, Phase, SeatConfig, Stance
+from debate_tool.intervention import Hook, InterventionPolicy, Move
 
 DEBATER_A = SeatConfig(seat_id="skeptic", provider="prov-a", model="model-a", system_prompt="You are the skeptic.")
 DEBATER_B = SeatConfig(
@@ -18,7 +19,7 @@ def well_formed(target: str, stance: str, argument: str) -> str:
     return f"TARGET: {target}\nSTANCE: {stance}\nARGUMENT: {argument}"
 
 
-def make_session(*, adapter_a, adapter_b, adapter_c, max_rounds=8, reframer=None, adapter_r=None):
+def make_session(*, adapter_a, adapter_b, adapter_c, max_rounds=8, reframer=None, adapter_r=None, policy=None):
     adapters = {"prov-a": adapter_a, "prov-b": adapter_b, "prov-c": adapter_c}
     if reframer is not None:
         adapters["prov-r"] = adapter_r
@@ -29,6 +30,7 @@ def make_session(*, adapter_a, adapter_b, adapter_c, max_rounds=8, reframer=None
         reframer=reframer,
         max_rounds=max_rounds,
         adapters=adapters,
+        policy=policy,
     )
 
 
@@ -223,3 +225,98 @@ def test_reframe_returns_none_when_unparseable():
     )
 
     assert session.run_reframe() is None
+
+
+# --- intervention hooks (milestone 5) --------------------------------------------
+
+
+def _no_rebuttal_responses(n_rounds: int) -> tuple[list[str], list[str]]:
+    """n_rounds worth of well-formed EXTEND responses (no REBUT ever), for each seat."""
+    a = ["skeptic opening"] + [well_formed("x", "extend", f"a r{i}") for i in range(1, n_rounds + 1)]
+    b = ["generator opening"] + [well_formed("x", "extend", f"b r{i}") for i in range(1, n_rounds + 1)]
+    return a, b
+
+
+def test_no_policy_means_no_hook_events():
+    a, b = _no_rebuttal_responses(2)
+    adapter_c = FakeAdapter(
+        ["STALLED: no\nREASON: fine."] * 2 + ["AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"]
+    )
+    session = make_session(adapter_a=FakeAdapter(a), adapter_b=FakeAdapter(b), adapter_c=adapter_c, max_rounds=2)
+
+    result = session.run()
+
+    assert result.hook_events == []
+
+
+def test_on_phase_change_fires_between_rounds_but_not_after_the_last_one():
+    a, b = _no_rebuttal_responses(3)
+    adapter_c = FakeAdapter(
+        ["STALLED: no\nREASON: fine."] * 3 + ["AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"]
+    )
+    move = Move(name="noop", when_to_use="always", template="noop for {seed}")
+    policy = InterventionPolicy(moves={"noop": move}, mapping={Hook.ON_PHASE_CHANGE: ("noop",)})
+    session = make_session(
+        adapter_a=FakeAdapter(a), adapter_b=FakeAdapter(b), adapter_c=adapter_c, max_rounds=3, policy=policy
+    )
+
+    result = session.run()
+
+    phase_changes = [e for e in result.hook_events if e.hook is Hook.ON_PHASE_CHANGE]
+    # 3 rounds run -> 2 transitions (1->2, 2->3); no phase-change announced for a
+    # round 4 that never runs.
+    assert [e.round_index for e in phase_changes] == [2, 3]
+    assert all(e.applied_moves == ("noop",) for e in phase_changes)
+    assert all(e.rendered == (f"noop for {SEED}",) for e in phase_changes)
+
+
+def test_on_false_consensus_fires_when_a_round_has_no_rebuttal():
+    a, b = _no_rebuttal_responses(1)
+    adapter_c = FakeAdapter(
+        ["STALLED: yes\nREASON: done."] + ["AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"]
+    )
+    policy = InterventionPolicy(moves={}, mapping={})
+    session = make_session(
+        adapter_a=FakeAdapter(a), adapter_b=FakeAdapter(b), adapter_c=adapter_c, max_rounds=8, policy=policy
+    )
+
+    result = session.run()
+
+    false_consensus = [e for e in result.hook_events if e.hook is Hook.ON_FALSE_CONSENSUS]
+    assert len(false_consensus) == 1
+    assert false_consensus[0].round_index == 1
+    assert false_consensus[0].applied_moves == ()  # no move registered, but the condition is still recorded
+
+
+def test_on_early_narrowing_fires_when_a_target_repeats():
+    adapter_a = FakeAdapter(
+        [
+            "skeptic opening",
+            well_formed("generator opening", "extend", "a round1"),
+            well_formed("generator opening", "extend", "a round2, same target again"),
+        ]
+    )
+    adapter_b = FakeAdapter(
+        [
+            "generator opening",
+            well_formed("skeptic opening", "extend", "b round1"),
+            well_formed("skeptic round1", "extend", "b round2"),
+        ]
+    )
+    adapter_c = FakeAdapter(
+        [
+            "STALLED: no\nREASON: fine.",
+            "STALLED: yes\nREASON: done.",
+            "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc",
+        ]
+    )
+    policy = InterventionPolicy(moves={}, mapping={})
+    session = make_session(
+        adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c, max_rounds=8, policy=policy
+    )
+
+    result = session.run()
+
+    narrowing = [e for e in result.hook_events if e.hook is Hook.ON_EARLY_NARROWING]
+    assert len(narrowing) == 1
+    assert narrowing[0].round_index == 2  # round 2's "a" turn re-targets round 1's target
