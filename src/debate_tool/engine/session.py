@@ -58,7 +58,7 @@ class DebateResult:
     transcript: list[Turn]
     disagreement_map: DisagreementMap
     rounds_run: int
-    stop_reason: str  # "stalled" | "max_rounds"
+    stop_reason: str  # "stalled" | "max_rounds" | "user" (on_round_end returned "stop")
     stall_judgments: list[StallJudgment]
     hook_events: list[HookEvent]
 
@@ -236,9 +236,39 @@ class DebateSession:
 
     # --- full run ---------------------------------------------------------------
 
-    def run(self, choose_framing: Callable[[list[str]], str] | None = None) -> DebateResult:
+    def run(
+        self,
+        choose_framing: Callable[[list[str]], str] | None = None,
+        on_event: Callable[[str, dict], None] | None = None,
+        on_round_end: Callable[["DebateSession", tuple[Turn, Turn], int, StallJudgment], str | None] | None = None,
+    ) -> DebateResult:
+        """Runs reframe -> independent takes -> cross-critique rounds -> map.
+
+        Two optional callbacks are milestone 6's CLI seam (see this module's
+        docstring): `on_event(name, payload)` is a fire-and-forget progress
+        notification ("problem_set", "independent_take" x2, "map_done"), for
+        printing progress without needing to drive the loop itself. `on_round_end`
+        is called after *every* round, including one the auto-stall judgment or
+        max_rounds would otherwise end, with the session itself, that round's
+        turns, its index, and the judgment; since it receives the session, it can
+        append a genuine user interjection to either debater's history
+        (`session.store.append(...)`) before the next round's prompt is built.
+        Its return value can override what happens next: "stop" ends the debate
+        now (`stop_reason` becomes "user"), "continue" keeps going even if the
+        round was judged stalled, and anything else (including None, the default)
+        defers to the judgment. Neither callback changes behavior when omitted.
+        """
+
+        def emit(name: str, **payload: object) -> None:
+            if on_event is not None:
+                on_event(name, payload)
+
         problem = self.run_reframe(choose_framing) or self.seed
-        self.run_independent_takes(problem)
+        emit("problem_set", problem=problem)
+
+        take_a, take_b = self.run_independent_takes(problem)
+        emit("independent_take", turn=take_a)
+        emit("independent_take", turn=take_b)
 
         prior_targets: list[str] = []
         phase = Phase.EXPAND
@@ -253,8 +283,11 @@ class DebateSession:
             self.stall_judgments.append(judgment)
             prior_targets.extend(t.target for t in turns if t.target)
 
-            if judgment.stalled:
-                stop_reason = "stalled"
+            decision = on_round_end(self, turns, round_index, judgment) if on_round_end else None
+            should_stop = judgment.stalled if decision not in ("stop", "continue") else decision == "stop"
+
+            if should_stop:
+                stop_reason = "user" if decision == "stop" else "stalled"
                 break
 
             round_index += 1
@@ -263,9 +296,12 @@ class DebateSession:
                 # Don't announce a phase change for a round that won't actually run.
                 self._fire(Hook.ON_PHASE_CHANGE, round_index, prior_targets)
 
+        disagreement_map = self.build_map()
+        emit("map_done", disagreement_map=disagreement_map)
+
         return DebateResult(
             transcript=list(self.transcript),
-            disagreement_map=self.build_map(),
+            disagreement_map=disagreement_map,
             rounds_run=min(round_index, self.max_rounds),
             stop_reason=stop_reason,
             stall_judgments=list(self.stall_judgments),

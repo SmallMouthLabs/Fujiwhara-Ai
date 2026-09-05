@@ -77,12 +77,11 @@ debate-tool/
 
 ## Current status
 
-Design is complete and captured in `docs/`. Language/interface are settled (Python, CLI first;
-see `docs/DECISIONS.md` D9-D13). Milestones 1-5 are done: `src/debate_tool/providers/`,
-`src/debate_tool/state.py`, `src/debate_tool/engine/` (the core loop), `persona_config.py` plus
-`config/personas/*.yaml`, and `src/debate_tool/intervention/` plus `config/moves/` (empty by
-design) and `config/policy.yaml` (the move/hook interface), all with tests. No CLI yet, so the
-engine isn't runnable end to end from the terminal (milestone 6).
+All six MVP milestones are done: `src/debate_tool/providers/`, `state.py`, `engine/` (the core
+loop), `persona_config.py` plus `config/personas/*.yaml`, `intervention/` plus `config/moves/`
+(empty by design) and `config/policy.yaml`, and `cli.py` (run with `debate-tool` or
+`python -m debate_tool`; see README.md). The tool runs end to end from the terminal now. See
+"Defer until the core works" below for what's deliberately not built yet.
 
 ## Suggested first milestones
 
@@ -94,9 +93,10 @@ engine isn't runnable end to end from the terminal (milestone 6).
    cross-critique rounds with the uptake rule enforced, then the disagreement map.~~
    Done (`src/debate_tool/engine/`: `session.py` is the loop, `uptake.py`/`reframe.py`
    are the prompt contracts, `conductor.py`/`map.py` build the disagreement map).
-   User interjection and real reframe-choice UI are stubbed as extension points
-   (`choose_framing` callback; the loop's stepwise methods) for milestone 6 to drive,
-   not yet wired to any actual terminal input.
+   User interjection and real reframe-choice UI are wired to the terminal by
+   `cli.py` (milestone 6), via the extension points this milestone built
+   (`choose_framing`; `run`'s `on_round_end` callback, added in milestone 6, since
+   driving the round loop from outside would have duplicated it).
 4. ~~Config-driven personas for the two anchor seats plus the conductor.~~ Done
    (`src/debate_tool/persona_config.py` loads `config/personas/*.yaml` into
    `SeatConfig`; `load_persona_set` assembles them by role into what `DebateSession`
@@ -111,7 +111,14 @@ engine isn't runnable end to end from the terminal (milestone 6).
    target repeats, `on_false_consensus` when a round has no rebuttal); `on_user_stall`
    is defined but unfired, since it needs real terminal I/O from milestone 6.
    `config/moves/` and `config/policy.yaml` ship empty/unmapped, per D8.
-6. A minimal interface (CLI first) that runs a full session end to end.
+6. ~~A minimal interface (CLI first) that runs a full session end to end.~~ Done
+   (`src/debate_tool/cli.py`, `__main__.py`, the `debate-tool` console script). Two
+   small additive changes landed in `engine/session.py` alongside it: `run()`
+   gained `on_event` (fire-and-forget progress notifications) and `on_round_end`
+   (called every round; can return `"stop"`/`"continue"` to override the auto-stall
+   judgment, and receives the session itself so a callback can append a real user
+   interjection via `session.store.append(...)` before the next round). Both
+   default to `None` and don't change existing behavior when omitted.
 
 Defer until the core works: the technique modules (SCAMPER and friends), adaptive intervention
 policies, visual idea-state tracking, and the measurement/logging harness. The interfaces for

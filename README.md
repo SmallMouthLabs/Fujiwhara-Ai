@@ -7,9 +7,11 @@ competing reasoning and reach your own conclusion.
 
 ## Status
 
-Design phase complete. Implementation not started. See `docs/` for the full design.
+All six MVP milestones from `CLAUDE.md` are built: provider adapters, per-seat state,
+the core debate loop, config-driven personas, the (currently empty) move/hook
+interface, and this CLI. See `docs/` for the full design.
 
-## How it works (intended)
+## How it works
 
 You give it a seed idea. Each model forms its own take without seeing the other's, then they
 are revealed and the models critique and build on each other under a strict "uptake" rule
@@ -37,10 +39,23 @@ pip install -e ".[dev]"
 pytest
 ```
 
-A run command for the CLI will be added once the core debate loop is built (see
-`CLAUDE.md` -> Suggested first milestones). Right now the codebase has the provider
-adapters (`src/debate_tool/providers/`) for talking to Claude and ChatGPT behind one
-common interface, with tests, and not much else yet.
+## Running it
+
+```bash
+debate-tool --seed "Should we build a smart fridge?"
+```
+
+(or `python -m debate_tool`, same thing). Run from the repo root, so the default
+`config/` paths resolve. Without `--seed` it prompts for one. Other flags:
+
+- `--auto`: never prompt between rounds; run the whole session automatically
+  (still shows progress; just skips the continue/stop/interject prompt).
+- `--max-rounds N`: hard cap on cross-critique rounds (default 8).
+- `--config-dir PATH`: use a different `config/` directory (default `config`).
+
+Mid-debate, after each round, you can continue automatically, stop now, force
+another round even if the conductor judged the debate stalled, or interject a note
+that gets added to both debaters' context before the next round.
 
 ## Project layout
 

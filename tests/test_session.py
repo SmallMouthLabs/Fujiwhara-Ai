@@ -320,3 +320,104 @@ def test_on_early_narrowing_fires_when_a_target_repeats():
     narrowing = [e for e in result.hook_events if e.hook is Hook.ON_EARLY_NARROWING]
     assert len(narrowing) == 1
     assert narrowing[0].round_index == 2  # round 2's "a" turn re-targets round 1's target
+
+
+# --- run() callbacks: progress and interjection (milestone 6's seam) -------------
+
+
+def test_on_event_fires_expected_progress_points_in_order():
+    adapter_a = FakeAdapter(["skeptic opening", well_formed("generator opening", "rebut", "a round1")])
+    adapter_b = FakeAdapter(["generator opening", well_formed("skeptic opening", "extend", "b round1")])
+    adapter_c = FakeAdapter(["STALLED: yes\nREASON: done.", "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"])
+    session = make_session(adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c)
+
+    events: list[tuple[str, dict]] = []
+    session.run(on_event=lambda name, payload: events.append((name, payload)))
+
+    names = [name for name, _ in events]
+    assert names == ["problem_set", "independent_take", "independent_take", "map_done"]
+    assert events[0][1]["problem"] == SEED
+    assert events[1][1]["turn"].seat_id == "skeptic"
+    assert events[2][1]["turn"].seat_id == "generator"
+    assert events[3][1]["disagreement_map"].open_question_prose == "c"
+
+
+def test_on_round_end_can_force_a_stop_even_when_not_judged_stalled():
+    adapter_a = FakeAdapter(
+        ["skeptic opening"]
+        + [well_formed("x", "extend", f"a r{i}") for i in range(1, 4)]
+    )
+    adapter_b = FakeAdapter(
+        ["generator opening"]
+        + [well_formed("x", "extend", f"b r{i}") for i in range(1, 4)]
+    )
+    # Only one "no" scripted: if the engine ran a second round despite the forced
+    # stop, this adapter would raise for lack of a scripted response.
+    adapter_c = FakeAdapter(["STALLED: no\nREASON: fine.", "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"])
+    session = make_session(adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c, max_rounds=8)
+
+    result = session.run(on_round_end=lambda *_: "stop")
+
+    assert result.stop_reason == "user"
+    assert result.rounds_run == 1
+    assert len(adapter_a.calls) == 2  # opening + round 1 only
+
+
+def test_on_round_end_can_force_continuing_past_a_stalled_judgment():
+    adapter_a = FakeAdapter(
+        ["skeptic opening", well_formed("x", "extend", "a r1"), well_formed("x", "extend", "a r2")]
+    )
+    adapter_b = FakeAdapter(
+        ["generator opening", well_formed("x", "extend", "b r1"), well_formed("x", "extend", "b r2")]
+    )
+    adapter_c = FakeAdapter(
+        [
+            "STALLED: yes\nREASON: looks stalled.",  # round 1: judged stalled, but overridden
+            "STALLED: yes\nREASON: still stalled.",  # round 2: judged stalled, deferred (not overridden)
+            "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc",
+        ]
+    )
+    session = make_session(adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c, max_rounds=8)
+
+    calls = []
+
+    def on_round_end(_session, _turns, round_index, judgment):
+        calls.append((round_index, judgment.stalled))
+        return "continue" if round_index == 1 else None
+
+    result = session.run(on_round_end=on_round_end)
+
+    assert calls == [(1, True), (2, True)]
+    assert result.rounds_run == 2
+    assert result.stop_reason == "stalled"
+
+
+def test_on_round_end_can_inject_a_message_into_both_debaters_histories():
+    adapter_a = FakeAdapter(
+        ["skeptic opening", well_formed("x", "extend", "a r1"), well_formed("x", "extend", "a r2")]
+    )
+    adapter_b = FakeAdapter(
+        ["generator opening", well_formed("x", "extend", "b r1"), well_formed("x", "extend", "b r2")]
+    )
+    adapter_c = FakeAdapter(
+        ["STALLED: no\nREASON: fine.", "STALLED: yes\nREASON: done.", "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"]
+    )
+    session = make_session(adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c, max_rounds=8)
+
+    def inject_once(sess, _turns, round_index, _judgment):
+        if round_index == 1:
+            from debate_tool.providers.base import Message
+
+            sess.store.append(sess.debater_a.seat_id, Message(role="user", content="a user interjection"))
+            sess.store.append(sess.debater_b.seat_id, Message(role="user", content="a user interjection"))
+        return None
+
+    session.run(on_round_end=inject_once)
+
+    history_a = session.store.history("skeptic")
+    injected = [m for m in history_a if m.content == "a user interjection"]
+    assert len(injected) == 1
+    # it lands after round 1's exchange and before round 2's critique prompt
+    injected_index = history_a.index(injected[0])
+    assert history_a[injected_index - 1].role == "assistant"  # round 1's own response
+    assert history_a[injected_index + 1].role == "user"  # round 2's critique prompt
