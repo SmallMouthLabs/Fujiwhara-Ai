@@ -20,7 +20,9 @@ def well_formed(target: str, stance: str, argument: str) -> str:
     return f"TARGET: {target}\nSTANCE: {stance}\nARGUMENT: {argument}"
 
 
-def make_session(*, adapter_a, adapter_b, adapter_c, max_rounds=8, reframer=None, adapter_r=None, policy=None):
+def make_session(
+    *, adapter_a, adapter_b, adapter_c, max_rounds=8, min_rounds=2, reframer=None, adapter_r=None, policy=None
+):
     adapters = {"prov-a": adapter_a, "prov-b": adapter_b, "prov-c": adapter_c}
     if reframer is not None:
         adapters["prov-r"] = adapter_r
@@ -30,6 +32,7 @@ def make_session(*, adapter_a, adapter_b, adapter_c, max_rounds=8, reframer=None
         conductor=CONDUCTOR,
         reframer=reframer,
         max_rounds=max_rounds,
+        min_rounds=min_rounds,
         adapters=adapters,
         policy=policy,
     )
@@ -277,8 +280,15 @@ def test_on_false_consensus_fires_when_a_round_has_no_rebuttal():
         ["STALLED: yes\nREASON: done."] + ["AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"]
     )
     policy = InterventionPolicy(moves={}, mapping={})
+    # min_rounds=1 so the round-1 stall verdict ends the debate here; this test is
+    # about the false-consensus hook firing, not the min-rounds floor.
     session = make_session(
-        adapter_a=FakeAdapter(a), adapter_b=FakeAdapter(b), adapter_c=adapter_c, max_rounds=8, policy=policy
+        adapter_a=FakeAdapter(a),
+        adapter_b=FakeAdapter(b),
+        adapter_c=adapter_c,
+        max_rounds=8,
+        min_rounds=1,
+        policy=policy,
     )
 
     result = session.run()
@@ -330,7 +340,7 @@ def test_on_event_fires_expected_progress_points_in_order():
     adapter_a = FakeAdapter(["skeptic opening", well_formed("generator opening", "rebut", "a round1")])
     adapter_b = FakeAdapter(["generator opening", well_formed("skeptic opening", "extend", "b round1")])
     adapter_c = FakeAdapter(["STALLED: yes\nREASON: done.", "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"])
-    session = make_session(adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c)
+    session = make_session(adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c, min_rounds=1)
 
     events: list[tuple[str, dict]] = []
     session.run(on_event=lambda name, payload: events.append((name, payload)))
@@ -428,9 +438,82 @@ def test_run_twice_on_same_session_is_rejected():
     adapter_a = FakeAdapter(["skeptic opening", well_formed("generator opening", "rebut", "a round1")])
     adapter_b = FakeAdapter(["generator opening", well_formed("skeptic opening", "extend", "b round1")])
     adapter_c = FakeAdapter(["STALLED: yes\nREASON: done.", "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"])
-    session = make_session(adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c)
+    session = make_session(adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c, min_rounds=1)
 
     session.run()
 
     with pytest.raises(RuntimeError, match="already run"):
         session.run()
+
+
+# --- min_rounds floor: an auto-stall verdict isn't honored too early (Q4) --------
+
+
+def test_round_one_stall_is_not_honored_by_default_min_rounds():
+    # Round 1 is judged stalled, but the default floor (min_rounds=2) means the
+    # debate proceeds to round 2 rather than ending on the first exchange.
+    adapter_a = FakeAdapter(
+        ["skeptic opening", well_formed("g", "rebut", "a r1"), well_formed("g", "rebut", "a r2")]
+    )
+    adapter_b = FakeAdapter(
+        ["generator opening", well_formed("s", "extend", "b r1"), well_formed("s", "extend", "b r2")]
+    )
+    adapter_c = FakeAdapter(
+        [
+            "STALLED: yes\nREASON: premature round-1 verdict.",
+            "STALLED: yes\nREASON: now genuinely stalled.",
+            "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc",
+        ]
+    )
+    session = make_session(adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c, max_rounds=8)
+
+    result = session.run()
+
+    # round 1's stall was ignored; round 2's stall (>= min_rounds) ended it
+    assert result.rounds_run == 2
+    assert result.stop_reason == "stalled"
+    # both rounds' judgments were still recorded, even the ignored one
+    assert [j.stalled for j in result.stall_judgments] == [True, True]
+
+
+def test_min_rounds_one_restores_round_one_stall_stopping():
+    a, b = _no_rebuttal_responses(1)
+    adapter_c = FakeAdapter(["STALLED: yes\nREASON: done.", "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"])
+    session = make_session(
+        adapter_a=FakeAdapter(a), adapter_b=FakeAdapter(b), adapter_c=adapter_c, max_rounds=8, min_rounds=1
+    )
+
+    result = session.run()
+
+    assert result.rounds_run == 1
+    assert result.stop_reason == "stalled"
+
+
+def test_explicit_user_stop_is_honored_even_before_min_rounds():
+    # The floor only gates the *automatic* stall; a user's explicit stop wins at
+    # round 1 regardless.
+    a, b = _no_rebuttal_responses(1)
+    adapter_c = FakeAdapter(["STALLED: no\nREASON: fine.", "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"])
+    session = make_session(
+        adapter_a=FakeAdapter(a), adapter_b=FakeAdapter(b), adapter_c=adapter_c, max_rounds=8, min_rounds=5
+    )
+
+    result = session.run(on_round_end=lambda *_: "stop")
+
+    assert result.rounds_run == 1
+    assert result.stop_reason == "user"
+
+
+def test_min_rounds_is_clamped_to_max_rounds():
+    # min_rounds greater than max_rounds must not deadlock the loop; it's clamped
+    # to max_rounds so the loop always terminates (here via the max_rounds cap).
+    a, b = _no_rebuttal_responses(1)
+    adapter_c = FakeAdapter(["STALLED: no\nREASON: fine.", "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"])
+    session = make_session(
+        adapter_a=FakeAdapter(a), adapter_b=FakeAdapter(b), adapter_c=adapter_c, max_rounds=1, min_rounds=9
+    )
+
+    assert session.min_rounds == 1
+    result = session.run()
+    assert result.rounds_run == 1
+    assert result.stop_reason == "max_rounds"

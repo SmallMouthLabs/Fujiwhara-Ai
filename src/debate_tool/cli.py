@@ -141,6 +141,19 @@ def _print_result(result: DebateResult) -> None:
     print(_wrap(dmap.open_question_prose or "(none)", indent="  "))
 
 
+def _positive_int(raw: str) -> int:
+    """argparse type for a >=1 count, so `--max-rounds 0` (or negative) is rejected
+    at parse time with a clean usage error instead of running a degenerate session
+    that still fires the final map call on an empty debate (Q6)."""
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {raw!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="debate-tool",
@@ -148,7 +161,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", help="The idea to debate. Prompted for if omitted.")
     parser.add_argument("--config-dir", default="config", help="Directory holding personas/, moves/, policy.yaml.")
-    parser.add_argument("--max-rounds", type=int, default=8, help="Hard cap on cross-critique rounds.")
+    parser.add_argument(
+        "--max-rounds", type=_positive_int, default=8, help="Hard cap on cross-critique rounds (>=1)."
+    )
     parser.add_argument(
         "--auto", action="store_true", help="Never prompt between rounds; run fully automatically."
     )

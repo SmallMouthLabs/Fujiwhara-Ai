@@ -71,6 +71,7 @@ class DebateSession:
         conductor: SeatConfig,
         reframer: SeatConfig | None = None,
         max_rounds: int = 8,
+        min_rounds: int = 2,
         adapters: dict[str, ProviderAdapter] | None = None,
         policy: InterventionPolicy | None = None,
     ) -> None:
@@ -79,6 +80,12 @@ class DebateSession:
         self.conductor = conductor
         self.reframer = reframer
         self.max_rounds = max_rounds
+        # An auto-stall verdict isn't honored before this many rounds have run.
+        # Round 1 is by definition the first cross-critique, so it always
+        # introduces new material; ending on a "stalled" judgment there is
+        # premature (docs review Q4). A user's explicit stop, or the max_rounds
+        # cap, still applies from round 1. Clamped so it can't exceed max_rounds.
+        self.min_rounds = max(1, min(min_rounds, max_rounds))
         self.policy = policy
 
         self.store = SeatStore()
@@ -183,6 +190,16 @@ class DebateSession:
 
     def _critique_prompt(self, seat: SeatConfig, phase: Phase, round_index: int) -> str:
         predecessor = self._find_turn(self._other_debater(seat).seat_id, round_index - 1)
+        # The predecessor's text is embedded verbatim, and responses are parsed for
+        # plain-text TARGET/STANCE/ARGUMENT markers (uptake.py). This is a deliberate
+        # tradeoff: plain text keeps ProviderAdapter symmetric across providers,
+        # where structured-output features don't line up (see providers/base.py).
+        # The cost is that a debater could emit those markers, or quote-breaking
+        # text, inside its prose and confuse the counterpart or the parser. The
+        # threat model here is debate quality between cooperating models the user
+        # configured, not a hostile external input, so this is an accepted ceiling,
+        # not a security boundary. If adversarial inputs ever enter, revisit with a
+        # delimiter/escaping scheme or provider-native structured output.
         return (
             f"{PHASE_INSTRUCTIONS[phase]}\n\n"
             f'Here is what the other debater said:\n\n"{predecessor.text}"\n\n'
@@ -257,7 +274,9 @@ class DebateSession:
         Its return value can override what happens next: "stop" ends the debate
         now (`stop_reason` becomes "user"), "continue" keeps going even if the
         round was judged stalled, and anything else (including None, the default)
-        defers to the judgment. Neither callback changes behavior when omitted.
+        defers to the judgment. A deferred auto-stall only stops the debate once
+        `min_rounds` rounds have run (see `__init__`); an explicit "stop" is
+        honored from round 1. Neither callback changes behavior when omitted.
 
         A session is single-use: `run()` appends to state seeded in `__init__`
         (the store already holds the debaters, the transcript accumulates), so
@@ -295,10 +314,14 @@ class DebateSession:
             prior_targets.extend(t.target for t in turns if t.target)
 
             decision = on_round_end(self, turns, round_index, judgment) if on_round_end else None
-            should_stop = judgment.stalled if decision not in ("stop", "continue") else decision == "stop"
-
-            if should_stop:
-                stop_reason = "user" if decision == "stop" else "stalled"
+            if decision == "stop":
+                stop_reason = "user"
+                break
+            if decision != "continue" and judgment.stalled and round_index >= self.min_rounds:
+                # Auto-stall stop, but only once past the min-rounds floor (Q4).
+                # An explicit "continue" overrides it; an explicit "stop" was
+                # handled above and always wins.
+                stop_reason = "stalled"
                 break
 
             round_index += 1

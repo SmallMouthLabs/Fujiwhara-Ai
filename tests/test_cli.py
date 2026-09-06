@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from types import SimpleNamespace
 
 import pytest
@@ -37,6 +38,24 @@ def test_arg_parser_overrides():
     assert args.config_dir == "other-config"
     assert args.max_rounds == 3
     assert args.auto is True
+
+
+def test_arg_parser_rejects_non_positive_max_rounds():
+    parser = cli.build_arg_parser()
+    for bad in ("0", "-1"):
+        with pytest.raises(SystemExit):  # argparse exits on a bad argument value
+            parser.parse_args(["--max-rounds", bad])
+
+
+def test_positive_int_validator():
+    assert cli._positive_int("1") == 1
+    assert cli._positive_int("8") == 8
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli._positive_int("0")
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli._positive_int("-3")
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli._positive_int("not-a-number")
 
 
 # --- API key preflight -------------------------------------------------------------
