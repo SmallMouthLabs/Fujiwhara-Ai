@@ -85,7 +85,7 @@ def test_anthropic_generate_joins_multiple_text_blocks():
     assert result.text == "part one. part two."
 
 
-def test_anthropic_not_found_maps_to_non_retryable_provider_error():
+def test_anthropic_not_found_maps_to_provider_error_with_status():
     client = MagicMock()
     client.messages.create.side_effect = make_status_error(
         anthropic.NotFoundError, status_code=404, message="model not found", error_type="not_found_error"
@@ -97,11 +97,10 @@ def test_anthropic_not_found_maps_to_non_retryable_provider_error():
 
     err = exc_info.value
     assert err.provider == "anthropic"
-    assert err.retryable is False
     assert err.status_code == 404
 
 
-def test_anthropic_rate_limit_maps_to_retryable_provider_error():
+def test_anthropic_rate_limit_maps_to_provider_error_with_status():
     client = MagicMock()
     client.messages.create.side_effect = make_status_error(
         anthropic.RateLimitError, status_code=429, message="rate limited", error_type="rate_limit_error"
@@ -111,11 +110,10 @@ def test_anthropic_rate_limit_maps_to_retryable_provider_error():
     with pytest.raises(ProviderError) as exc_info:
         adapter.generate([Message(role="user", content="hi")], model="claude-sonnet-5")
 
-    assert exc_info.value.retryable is True
     assert exc_info.value.status_code == 429
 
 
-def test_anthropic_server_error_is_retryable_but_client_error_is_not():
+def test_anthropic_status_error_preserves_status_code():
     client = MagicMock()
 
     client.messages.create.side_effect = make_status_error(
@@ -124,17 +122,17 @@ def test_anthropic_server_error_is_retryable_but_client_error_is_not():
     adapter = AnthropicAdapter(client=client)
     with pytest.raises(ProviderError) as exc_info:
         adapter.generate([Message(role="user", content="hi")], model="claude-sonnet-5")
-    assert exc_info.value.retryable is True
+    assert exc_info.value.status_code == 500
 
     client.messages.create.side_effect = make_status_error(
         anthropic.APIStatusError, status_code=400, message="bad request", error_type="invalid_request_error"
     )
     with pytest.raises(ProviderError) as exc_info:
         adapter.generate([Message(role="user", content="hi")], model="claude-sonnet-5")
-    assert exc_info.value.retryable is False
+    assert exc_info.value.status_code == 400
 
 
-def test_anthropic_connection_error_is_retryable():
+def test_anthropic_connection_error_has_no_status_code():
     client = MagicMock()
     client.messages.create.side_effect = make_connection_error(anthropic.APIConnectionError)
     adapter = AnthropicAdapter(client=client)
@@ -142,7 +140,6 @@ def test_anthropic_connection_error_is_retryable():
     with pytest.raises(ProviderError) as exc_info:
         adapter.generate([Message(role="user", content="hi")], model="claude-sonnet-5")
 
-    assert exc_info.value.retryable is True
     assert exc_info.value.status_code is None
 
 
@@ -176,13 +173,28 @@ def test_openai_generate_prepends_system_as_a_message():
             {"role": "system", "content": "You are the generator."},
             {"role": "user", "content": "seed idea"},
         ],
-        max_tokens=500,
+        max_completion_tokens=500,
         temperature=0.7,
     )
     assert result.text == "the generator's take"
     assert result.model == "gpt-5"
     assert result.input_tokens == 10
     assert result.output_tokens == 5
+
+
+def test_openai_sends_max_completion_tokens_not_deprecated_max_tokens():
+    # Regression: GPT-5 / reasoning models reject `max_tokens` and require
+    # `max_completion_tokens`. The generator seat defaults to gpt-5, so sending
+    # the deprecated name would fail every generator turn.
+    client = MagicMock()
+    client.chat.completions.create.return_value = _fake_openai_response()
+    adapter = OpenAIAdapter(client=client)
+
+    adapter.generate([Message(role="user", content="hi")], model="gpt-5", max_tokens=800)
+
+    _, kwargs = client.chat.completions.create.call_args
+    assert kwargs["max_completion_tokens"] == 800
+    assert "max_tokens" not in kwargs
 
 
 def test_openai_generate_omits_absent_optional_params():
@@ -209,7 +221,21 @@ def test_openai_handles_null_message_content():
     assert result.text == ""
 
 
-def test_openai_not_found_maps_to_non_retryable_provider_error():
+def test_openai_empty_choices_maps_to_provider_error_not_indexerror():
+    client = MagicMock()
+    response = _fake_openai_response()
+    response.choices = []  # e.g. every candidate blocked by a content filter
+    client.chat.completions.create.return_value = response
+    adapter = OpenAIAdapter(client=client)
+
+    with pytest.raises(ProviderError) as exc_info:
+        adapter.generate([Message(role="user", content="hi")], model="gpt-5")
+
+    assert exc_info.value.provider == "openai"
+    assert "no choices" in str(exc_info.value)
+
+
+def test_openai_not_found_maps_to_provider_error_with_status():
     client = MagicMock()
     client.chat.completions.create.side_effect = make_status_error(
         openai.NotFoundError, status_code=404, message="model not found", error_type="not_found_error"
@@ -221,11 +247,10 @@ def test_openai_not_found_maps_to_non_retryable_provider_error():
 
     err = exc_info.value
     assert err.provider == "openai"
-    assert err.retryable is False
     assert err.status_code == 404
 
 
-def test_openai_rate_limit_maps_to_retryable_provider_error():
+def test_openai_rate_limit_maps_to_provider_error_with_status():
     client = MagicMock()
     client.chat.completions.create.side_effect = make_status_error(
         openai.RateLimitError, status_code=429, message="rate limited", error_type="rate_limit_error"
@@ -235,11 +260,10 @@ def test_openai_rate_limit_maps_to_retryable_provider_error():
     with pytest.raises(ProviderError) as exc_info:
         adapter.generate([Message(role="user", content="hi")], model="gpt-5")
 
-    assert exc_info.value.retryable is True
     assert exc_info.value.status_code == 429
 
 
-def test_openai_connection_error_is_retryable():
+def test_openai_connection_error_has_no_status_code():
     client = MagicMock()
     client.chat.completions.create.side_effect = make_connection_error(openai.APIConnectionError)
     adapter = OpenAIAdapter(client=client)
@@ -247,7 +271,7 @@ def test_openai_connection_error_is_retryable():
     with pytest.raises(ProviderError) as exc_info:
         adapter.generate([Message(role="user", content="hi")], model="gpt-5")
 
-    assert exc_info.value.retryable is True
+    assert exc_info.value.status_code is None
 
 
 # --- Factory -----------------------------------------------------------------

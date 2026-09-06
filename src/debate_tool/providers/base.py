@@ -48,6 +48,15 @@ class ProviderError(Exception):
 
     The engine catches this one type; it does not need to know that Anthropic and
     OpenAI raise different exception hierarchies for "rate limited" or "bad request".
+
+    Note on retries: this error carries no `retryable` flag on purpose. Both SDKs
+    already retry transient failures (429, >=500, connection errors) with
+    exponential backoff on their own (`max_retries`, default 2), so by the time a
+    ProviderError surfaces here the automatic retries are exhausted or the error
+    was never retryable. Adding a second retry layer keyed on a flag here would
+    just double-retry. `status_code` is kept because it's genuinely useful for
+    reporting and for a caller that wants to branch (e.g. a 404 bad-model-id vs a
+    401 bad-key), not to drive retries.
     """
 
     def __init__(
@@ -55,13 +64,11 @@ class ProviderError(Exception):
         message: str,
         *,
         provider: str,
-        retryable: bool,
         status_code: int | None = None,
         cause: Exception | None = None,
     ) -> None:
         super().__init__(message)
         self.provider = provider
-        self.retryable = retryable
         self.status_code = status_code
         self.__cause__ = cause
 

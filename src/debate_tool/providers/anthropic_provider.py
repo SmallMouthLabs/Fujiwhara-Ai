@@ -44,7 +44,6 @@ class AnthropicAdapter(ProviderAdapter):
             raise ProviderError(
                 f"anthropic: model not found ({model}): {e}",
                 provider=self.name,
-                retryable=False,
                 status_code=404,
                 cause=e,
             ) from e
@@ -52,7 +51,6 @@ class AnthropicAdapter(ProviderAdapter):
             raise ProviderError(
                 f"anthropic: rate limited: {e}",
                 provider=self.name,
-                retryable=True,
                 status_code=429,
                 cause=e,
             ) from e
@@ -60,7 +58,6 @@ class AnthropicAdapter(ProviderAdapter):
             raise ProviderError(
                 f"anthropic: request failed ({e.status_code}): {e}",
                 provider=self.name,
-                retryable=e.status_code >= 500,
                 status_code=e.status_code,
                 cause=e,
             ) from e
@@ -68,7 +65,6 @@ class AnthropicAdapter(ProviderAdapter):
             raise ProviderError(
                 f"anthropic: connection failed: {e}",
                 provider=self.name,
-                retryable=True,
                 cause=e,
             ) from e
 

@@ -90,6 +90,7 @@ class DebateSession:
         self.hook_events: list[HookEvent] = []
 
         self._adapters: dict[str, ProviderAdapter] = dict(adapters or {})
+        self._ran = False  # a session is single-use; see run()'s guard
 
     # --- provider lookup ---------------------------------------------------------
 
@@ -257,7 +258,17 @@ class DebateSession:
         now (`stop_reason` becomes "user"), "continue" keeps going even if the
         round was judged stalled, and anything else (including None, the default)
         defers to the judgment. Neither callback changes behavior when omitted.
+
+        A session is single-use: `run()` appends to state seeded in `__init__`
+        (the store already holds the debaters, the transcript accumulates), so
+        running twice would replay opening takes onto existing history and produce
+        a corrupt transcript. Rerunning is a caller mistake, so it's rejected
+        rather than silently misbehaving; construct a fresh `DebateSession` per
+        debate.
         """
+        if self._ran:
+            raise RuntimeError("this DebateSession has already run; construct a new one per debate")
+        self._ran = True
 
         def emit(name: str, **payload: object) -> None:
             if on_event is not None:

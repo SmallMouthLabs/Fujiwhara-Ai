@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from conftest import FakeAdapter
 
 from debate_tool.engine import DebateSession, Phase, SeatConfig, Stance
@@ -421,3 +422,15 @@ def test_on_round_end_can_inject_a_message_into_both_debaters_histories():
     injected_index = history_a.index(injected[0])
     assert history_a[injected_index - 1].role == "assistant"  # round 1's own response
     assert history_a[injected_index + 1].role == "user"  # round 2's critique prompt
+
+
+def test_run_twice_on_same_session_is_rejected():
+    adapter_a = FakeAdapter(["skeptic opening", well_formed("generator opening", "rebut", "a round1")])
+    adapter_b = FakeAdapter(["generator opening", well_formed("skeptic opening", "extend", "b round1")])
+    adapter_c = FakeAdapter(["STALLED: yes\nREASON: done.", "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nc"])
+    session = make_session(adapter_a=adapter_a, adapter_b=adapter_b, adapter_c=adapter_c)
+
+    session.run()
+
+    with pytest.raises(RuntimeError, match="already run"):
+        session.run()

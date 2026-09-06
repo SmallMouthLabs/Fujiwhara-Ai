@@ -38,8 +38,19 @@ class OpenAIAdapter(ProviderAdapter):
         kwargs: dict = {
             "model": model,
             "messages": chat_messages,
-            "max_tokens": max_tokens,
+            # `max_completion_tokens`, not the deprecated `max_tokens`: reasoning
+            # models (the o-series and the GPT-5 family, which is the default
+            # generator seat, see config/personas/chatgpt-generator.yaml) reject
+            # `max_tokens` outright, and `max_completion_tokens` is the current
+            # parameter accepted across chat models. Verified against OpenAI's API
+            # docs and developer forum, Sept 2026.
+            "max_completion_tokens": max_tokens,
         }
+        # Only sent when a persona explicitly sets it. Note that GPT-5 / reasoning
+        # models only accept the default temperature (1) and error on any other
+        # value, so a persona that pins `temperature` on such a seat will get a
+        # clear provider error rather than silent wrongness; that's a config
+        # choice we surface rather than second-guess here.
         if temperature is not None:
             kwargs["temperature"] = temperature
 
@@ -49,7 +60,6 @@ class OpenAIAdapter(ProviderAdapter):
             raise ProviderError(
                 f"openai: model not found ({model}): {e}",
                 provider=self.name,
-                retryable=False,
                 status_code=404,
                 cause=e,
             ) from e
@@ -57,7 +67,6 @@ class OpenAIAdapter(ProviderAdapter):
             raise ProviderError(
                 f"openai: rate limited: {e}",
                 provider=self.name,
-                retryable=True,
                 status_code=429,
                 cause=e,
             ) from e
@@ -65,7 +74,6 @@ class OpenAIAdapter(ProviderAdapter):
             raise ProviderError(
                 f"openai: request failed ({e.status_code}): {e}",
                 provider=self.name,
-                retryable=e.status_code >= 500,
                 status_code=e.status_code,
                 cause=e,
             ) from e
@@ -73,9 +81,17 @@ class OpenAIAdapter(ProviderAdapter):
             raise ProviderError(
                 f"openai: connection failed: {e}",
                 provider=self.name,
-                retryable=True,
                 cause=e,
             ) from e
+
+        # An empty choices list is possible (e.g. a content filter blocked every
+        # candidate). Guard it so it surfaces as a ProviderError like every other
+        # failure mode, not as a raw IndexError that escapes this translation layer.
+        if not response.choices:
+            raise ProviderError(
+                f"openai: response contained no choices (model {model})",
+                provider=self.name,
+            )
 
         choice = response.choices[0]
 
