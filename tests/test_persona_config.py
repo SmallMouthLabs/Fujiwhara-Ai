@@ -180,8 +180,8 @@ def test_load_persona_set_assembles_by_role(tmp_path):
 
 
 def test_load_persona_set_reframer_is_optional(tmp_path):
-    write(tmp_path, "skeptic.yaml", _role_file("skeptic", "skeptic"))
-    write(tmp_path, "generator.yaml", _role_file("generator", "generator"))
+    write(tmp_path, "skeptic.yaml", _role_file("skeptic", "skeptic", "anthropic"))
+    write(tmp_path, "generator.yaml", _role_file("generator", "generator", "openai"))
     write(tmp_path, "conductor.yaml", _role_file("conductor", "conductor"))
 
     result = load_persona_set(tmp_path)
@@ -201,11 +201,50 @@ def test_load_persona_set_missing_required_role_raises(tmp_path):
 def test_load_persona_set_duplicate_role_raises(tmp_path):
     write(tmp_path, "skeptic1.yaml", _role_file("skeptic-1", "skeptic"))
     write(tmp_path, "skeptic2.yaml", _role_file("skeptic-2", "skeptic"))
-    write(tmp_path, "generator.yaml", _role_file("generator", "generator"))
+    write(tmp_path, "generator.yaml", _role_file("generator", "generator", "openai"))
     write(tmp_path, "conductor.yaml", _role_file("conductor", "conductor"))
 
     with pytest.raises(PersonaConfigError, match="more than one seat declares role 'skeptic'"):
         load_persona_set(tmp_path)
+
+
+def _role_file_with_model(seat_id: str, role: str, provider: str, model: str) -> str:
+    return f'seat_id: {seat_id}\nrole: {role}\nprovider: {provider}\nmodel: {model}\nsystem_prompt: "p"\n'
+
+
+def test_load_persona_set_rejects_both_debaters_on_same_provider_and_model(tmp_path):
+    # CLAUDE.md principle 2: the two anchor debaters must be different models.
+    write(tmp_path, "skeptic.yaml", _role_file_with_model("skeptic", "skeptic", "anthropic", "claude-sonnet-5"))
+    write(tmp_path, "generator.yaml", _role_file_with_model("generator", "generator", "anthropic", "claude-sonnet-5"))
+    write(tmp_path, "conductor.yaml", _role_file("conductor", "conductor"))
+
+    with pytest.raises(PersonaConfigError, match="must run on different models"):
+        load_persona_set(tmp_path)
+
+
+def test_load_persona_set_allows_same_model_name_on_different_providers(tmp_path):
+    # provider+model is what identifies the underlying model; a shared bare model
+    # name across two different providers is two different models, so it's allowed.
+    write(tmp_path, "skeptic.yaml", _role_file_with_model("skeptic", "skeptic", "anthropic", "m"))
+    write(tmp_path, "generator.yaml", _role_file_with_model("generator", "generator", "openai", "m"))
+    write(tmp_path, "conductor.yaml", _role_file("conductor", "conductor"))
+
+    result = load_persona_set(tmp_path)
+
+    assert result.debater_skeptic.provider == "anthropic"
+    assert result.debater_generator.provider == "openai"
+
+
+def test_load_persona_set_conductor_may_share_a_debaters_model(tmp_path):
+    # The distinctness rule is only about the two *debaters*; the conductor (which
+    # contributes no debate content) is free to reuse either debater's model.
+    write(tmp_path, "skeptic.yaml", _role_file_with_model("skeptic", "skeptic", "anthropic", "claude-sonnet-5"))
+    write(tmp_path, "generator.yaml", _role_file_with_model("generator", "generator", "openai", "gpt-5"))
+    write(tmp_path, "conductor.yaml", _role_file_with_model("conductor", "conductor", "anthropic", "claude-sonnet-5"))
+
+    result = load_persona_set(tmp_path)
+
+    assert result.conductor.model == "claude-sonnet-5"
 
 
 # --- the real, shipped config/personas/ directory --------------------------------

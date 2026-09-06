@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from ._parsing import label
 from .turns import Stance
 
 UPTAKE_FORMAT_INSTRUCTIONS = """
@@ -31,14 +32,17 @@ CORRECTIVE_NUDGE = (
     "Redo it in exactly this three-field format, nothing before or after it:\n\n" + UPTAKE_FORMAT_INSTRUCTIONS
 )
 
+# Bold-label tolerance lives in `label()` (see _parsing.py), applied only around
+# the labels, never to the captured value.
+#
 # The capture group is `.*?` (zero-or-more), not `.+?`: `.+?` must consume at least
 # one character before it's allowed to check the lookahead, so on an empty/blank
 # field it eats the lookahead's own leading "\n" and then can never find it again,
 # swallowing the next field's label text into this group. `.*?` can match zero
 # characters, so it can satisfy the lookahead without consuming past the boundary.
-_TARGET_RE = re.compile(r"TARGET:[ \t]*(.*?)(?=\n\s*STANCE:|\Z)", re.IGNORECASE | re.DOTALL)
-_STANCE_RE = re.compile(r"STANCE:[ \t]*(steelman|extend|rebut)\b", re.IGNORECASE)
-_ARGUMENT_RE = re.compile(r"ARGUMENT:[ \t]*(.+)\Z", re.IGNORECASE | re.DOTALL)
+_TARGET_RE = re.compile(label("TARGET") + r"(.*?)(?=\n\s*" + label("STANCE") + r"|\Z)", re.IGNORECASE | re.DOTALL)
+_STANCE_RE = re.compile(label("STANCE") + r"(steelman|extend|rebut)\b", re.IGNORECASE)
+_ARGUMENT_RE = re.compile(label("ARGUMENT") + r"(.+)\Z", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -53,13 +57,14 @@ def parse_uptake(raw_text: str) -> ParsedUptake:
     """Extract TARGET/STANCE/ARGUMENT from a raw response.
 
     Tolerant of light markdown (bold labels) and of stray whitespace, since that's
-    the kind of drift a retry is meant to absorb, not reject outright. `ok` is True
-    only when all three fields were found and non-empty.
+    the kind of drift a retry is meant to absorb, not reject outright. Bold tolerance
+    is confined to the labels (see `label()` in _parsing.py); asterisks inside the
+    captured argument, target, etc. are preserved verbatim. `ok` is True only when
+    all three fields were found and non-empty.
     """
-    text = raw_text.replace("*", "")  # tolerate "**TARGET:**"-style bold labels
-    target_m = _TARGET_RE.search(text)
-    stance_m = _STANCE_RE.search(text)
-    argument_m = _ARGUMENT_RE.search(text)
+    target_m = _TARGET_RE.search(raw_text)
+    stance_m = _STANCE_RE.search(raw_text)
+    argument_m = _ARGUMENT_RE.search(raw_text)
 
     target = target_m.group(1).strip() if target_m else None
     stance = Stance(stance_m.group(1).lower()) if stance_m else None

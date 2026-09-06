@@ -122,6 +122,13 @@ def load_persona_set(directory: str | Path) -> PersonaSet:
     "conductor"; "reframer" is optional (zero or one). Anything else, a missing
     required role or two seats claiming the same one, fails loudly: that's a
     config mistake, not something to silently pick a winner for.
+
+    Also enforces that the two anchor debaters run on different underlying models.
+    This is CLAUDE.md's non-negotiable principle 2 (and docs/DECISIONS.md D2), "the
+    main defense against mode collapse and shared blind spots"; two personas on one
+    model quietly defeats the whole premise of the tool, so it's rejected here
+    rather than allowed to run looking fine. Seats are matched on (provider, model)
+    since that pair is what actually determines the underlying model.
     """
     directory = Path(directory)
     seats = load_personas(directory)
@@ -141,9 +148,21 @@ def load_persona_set(directory: str | Path) -> PersonaSet:
             return None
         return candidates[0]
 
+    skeptic = one("skeptic", required=True)
+    generator = one("generator", required=True)
+
+    if (skeptic.provider, skeptic.model) == (generator.provider, generator.model):
+        raise PersonaConfigError(
+            f"{directory}: the two anchor debaters ({skeptic.seat_id!r}, {generator.seat_id!r}) "
+            f"must run on different models, but both use provider {skeptic.provider!r} "
+            f"model {skeptic.model!r}. Running both debaters on one model defeats the "
+            f"tool's main defense against mode collapse (CLAUDE.md principle 2); point "
+            f"one seat at a different provider/model."
+        )
+
     return PersonaSet(
-        debater_skeptic=one("skeptic", required=True),
-        debater_generator=one("generator", required=True),
+        debater_skeptic=skeptic,
+        debater_generator=generator,
         conductor=one("conductor", required=True),
         reframer=one("reframer", required=False),
     )

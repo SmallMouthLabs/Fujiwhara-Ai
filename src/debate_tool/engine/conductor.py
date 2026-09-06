@@ -17,14 +17,17 @@ import re
 from dataclasses import dataclass
 
 from ..providers.base import Message, ProviderAdapter
+from ._parsing import label
 from .map import MapSkeleton, SkeletonEntry
 from .seats import SeatConfig
 from .turns import Turn
 
 # --- Stall detection (docs/DECISIONS.md D13) ------------------------------------
 
-_STALL_RE = re.compile(r"STALLED:[ \t]*(yes|no)\b", re.IGNORECASE)
-_STALL_REASON_RE = re.compile(r"REASON:[ \t]*(.+)\Z", re.IGNORECASE | re.DOTALL)
+# Bold-label tolerance via `label()` (see _parsing.py), around the labels only;
+# the captured REASON / map prose keeps any asterisks the model wrote.
+_STALL_RE = re.compile(label("STALLED") + r"(yes|no)\b", re.IGNORECASE)
+_STALL_REASON_RE = re.compile(label("REASON") + r"(.+)\Z", re.IGNORECASE | re.DOTALL)
 
 _STALL_PROMPT = """
 You are judging whether a debate has stalled: whether the latest round introduces
@@ -72,11 +75,10 @@ def check_stalled(
         max_tokens=200,
     )
 
-    text = response.text.replace("*", "")  # tolerate "**STALLED:**"-style bold labels
-    stall_m = _STALL_RE.search(text)
-    reason_m = _STALL_REASON_RE.search(text)
+    stall_m = _STALL_RE.search(response.text)
+    reason_m = _STALL_REASON_RE.search(response.text)
     stalled = bool(stall_m) and stall_m.group(1).lower() == "yes"
-    reason = reason_m.group(1).strip() if reason_m else text.strip()
+    reason = reason_m.group(1).strip() if reason_m else response.text.strip()
     return StallJudgment(stalled=stalled, reason=reason)
 
 
@@ -106,9 +108,13 @@ one question for the user to decide, phrased directly from the splits above, int
 """.strip()
 
 # `.*?`, not `.+?` -- see the comment on uptake.py's _TARGET_RE for why.
-_AGREEMENTS_RE = re.compile(r"AGREEMENTS:[ \t]*(.*?)(?=\n\s*SPLITS:|\Z)", re.IGNORECASE | re.DOTALL)
-_SPLITS_RE = re.compile(r"SPLITS:[ \t]*(.*?)(?=\n\s*OPEN QUESTION:|\Z)", re.IGNORECASE | re.DOTALL)
-_OPEN_QUESTION_RE = re.compile(r"OPEN QUESTION:[ \t]*(.+)\Z", re.IGNORECASE | re.DOTALL)
+_AGREEMENTS_RE = re.compile(
+    label("AGREEMENTS") + r"(.*?)(?=\n\s*" + label("SPLITS") + r"|\Z)", re.IGNORECASE | re.DOTALL
+)
+_SPLITS_RE = re.compile(
+    label("SPLITS") + r"(.*?)(?=\n\s*" + label("OPEN QUESTION") + r"|\Z)", re.IGNORECASE | re.DOTALL
+)
+_OPEN_QUESTION_RE = re.compile(label("OPEN QUESTION") + r"(.+)\Z", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -146,10 +152,9 @@ def build_disagreement_map(
         max_tokens=1500,
     )
 
-    text = response.text.replace("*", "")  # tolerate "**AGREEMENTS:**"-style bold labels
-    agreements_m = _AGREEMENTS_RE.search(text)
-    splits_m = _SPLITS_RE.search(text)
-    open_question_m = _OPEN_QUESTION_RE.search(text)
+    agreements_m = _AGREEMENTS_RE.search(response.text)
+    splits_m = _SPLITS_RE.search(response.text)
+    open_question_m = _OPEN_QUESTION_RE.search(response.text)
 
     return DisagreementMap(
         agreements_prose=agreements_m.group(1).strip() if agreements_m else "",

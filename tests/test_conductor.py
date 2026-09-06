@@ -79,3 +79,30 @@ def test_build_disagreement_map_prompt_is_grounded_in_the_skeleton_only():
     assert "b's original claim" in sent
     assert "a's rebuttal text" in sent
     assert "Do not introduce any claim" in sent
+
+
+def test_disagreement_map_preserves_asterisks_in_prose():
+    # Regression: the map prose is the final user-facing artifact; a global
+    # asterisk strip once mangled any emphasis or math the conductor wrote.
+    adapter = FakeAdapter(
+        [
+            "**AGREEMENTS:**\nBoth agreed cost scales as users * price.\n\n"
+            "**SPLITS:**\nThey split on **whether** that holds at scale.\n\n"
+            "**OPEN QUESTION:**\nIs 2 * growth worth 2 * risk?"
+        ]
+    )
+    result = build_disagreement_map(adapter, CONDUCTOR, MapSkeleton(agreements=[], splits=[]))
+
+    assert result.agreements_prose == "Both agreed cost scales as users * price."
+    assert result.splits_prose == "They split on **whether** that holds at scale."
+    assert result.open_question_prose == "Is 2 * growth worth 2 * risk?"
+
+
+def test_check_stalled_preserves_asterisks_in_reason():
+    adapter = FakeAdapter(["**STALLED:** no\n**REASON:** a new 2 * cost angle appeared"])
+    turn = Turn(seat_id="a", round_index=1, phase=Phase.EXPAND, text="t", stance=Stance.EXTEND)
+
+    judgment = check_stalled(adapter, CONDUCTOR, [turn], prior_targets=[])
+
+    assert judgment.stalled is False
+    assert judgment.reason == "a new 2 * cost angle appeared"

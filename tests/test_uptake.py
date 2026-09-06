@@ -29,6 +29,45 @@ def test_tolerates_markdown_bold_labels():
     assert result.stance is Stance.EXTEND
 
 
+def test_tolerates_bold_label_without_trailing_asterisks_on_colon():
+    # the "**LABEL**:" bold style, as opposed to "**LABEL:**"
+    raw = "**TARGET**: the point\n**STANCE**: rebut\n**ARGUMENT**: because reasons"
+
+    result = parse_uptake(raw)
+
+    assert result.ok is True
+    assert result.target == "the point"
+    assert result.stance is Stance.REBUT
+    assert result.argument == "because reasons"
+
+
+def test_asterisks_inside_content_are_preserved_not_stripped():
+    # Regression for the bold-label tolerance once being a global strip of every
+    # asterisk, which silently deleted emphasis, math, and markers from content.
+    raw = (
+        "TARGET: the claim that revenue scales as price * volume\n"
+        "STANCE: rebut\n"
+        "ARGUMENT: no, margin **compresses** past the inflection, so 2 * price does not mean 2 * profit"
+    )
+
+    result = parse_uptake(raw)
+
+    assert result.ok is True
+    assert result.target == "the claim that revenue scales as price * volume"
+    assert result.argument == (
+        "no, margin **compresses** past the inflection, so 2 * price does not mean 2 * profit"
+    )
+
+
+def test_bold_label_with_bolded_content_keeps_content_asterisks():
+    raw = "**TARGET:** point\n**STANCE:** extend\n**ARGUMENT:** I fully endorse **this** part"
+
+    result = parse_uptake(raw)
+
+    assert result.ok is True
+    assert result.argument == "I fully endorse **this** part"
+
+
 def test_missing_field_is_not_ok():
     raw = "STANCE: steelman\nARGUMENT: some reasoning, no target given"
 

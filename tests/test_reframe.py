@@ -31,3 +31,15 @@ def test_blank_framing_blocks_are_dropped():
     raw = "FRAMING: real one\nFRAMING:   \nFRAMING: another real one"
 
     assert parse_framings(raw) == ["real one", "another real one"]
+
+
+def test_bold_labels_tolerated_and_content_asterisks_preserved():
+    raw = (
+        "**FRAMING:** this is really about 5 * the current scale\n"
+        "**FRAMING:** it's a **trust** problem, not a tech one"
+    )
+
+    assert parse_framings(raw) == [
+        "this is really about 5 * the current scale",
+        "it's a **trust** problem, not a tech one",
+    ]

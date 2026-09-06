@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import re
 
+from ._parsing import label
+
 REFRAME_PROMPT = """
 The user's seed idea:
 
@@ -30,9 +32,10 @@ FRAMING: third alternate framing (optional)
 
 # `.*?`, not `.+?` -- see the comment on uptake.py's _TARGET_RE for why: `.+?` would
 # swallow a blank framing block's boundary and eat the next "FRAMING:" label as content.
-_FRAMING_RE = re.compile(r"FRAMING:[ \t]*(.*?)(?=\n\s*FRAMING:|\Z)", re.IGNORECASE | re.DOTALL)
+# Bold tolerance is around the label only (see `label()`), so a framing that itself
+# uses asterisks keeps them.
+_FRAMING_RE = re.compile(label("FRAMING") + r"(.*?)(?=\n\s*" + label("FRAMING") + r"|\Z)", re.IGNORECASE | re.DOTALL)
 
 
 def parse_framings(raw_text: str) -> list[str]:
-    text = raw_text.replace("*", "")  # tolerate "**FRAMING:**"-style bold labels
-    return [m.strip() for m in _FRAMING_RE.findall(text) if m.strip()]
+    return [m.strip() for m in _FRAMING_RE.findall(raw_text) if m.strip()]
