@@ -1,0 +1,40 @@
+#!/bin/sh
+# Self-locating launcher for the Multi-Model Debate Tool.
+#
+# Runs the tool from its project virtualenv AND with the project directory as the
+# working directory, so `.env` and any relative --config-dir / --save paths
+# resolve. Unlike a hand-written launcher, this needs no per-machine editing: it
+# finds the project root relative to its own real location.
+#
+# Use it any of these ways:
+#   - directly, from anywhere:   /path/to/repo/bin/debate-tool --help
+#   - add repo/bin to your PATH: export PATH="$PATH:/path/to/repo/bin"
+#   - symlink onto your PATH:     ln -s /path/to/repo/bin/debate-tool ~/.local/bin/debate-tool
+# The symlink form works because the script resolves symlinks to find the repo.
+#
+# Note: the tool runs from the project directory, so a relative --save (or
+# --config-dir) is relative to the project, not to where you invoked this. Pass an
+# absolute --save path to write the transcript elsewhere.
+
+# Resolve this script's real path, following symlinks (portable; no readlink -f).
+src=$0
+while [ -h "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  case $src in
+    /*) ;;
+    *) src=$dir/$src ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$src")" && pwd)
+PROJECT=$(cd -P "$SCRIPT_DIR/.." && pwd)
+
+cd "$PROJECT" || { echo "debate-tool: project root not found at $PROJECT" >&2; exit 1; }
+
+if [ ! -x "$PROJECT/.venv/bin/debate-tool" ]; then
+  echo "debate-tool: venv entry point not found at $PROJECT/.venv/bin/debate-tool" >&2
+  echo "  Set it up first:  python3 -m venv .venv && .venv/bin/pip install -e \".[dev]\"" >&2
+  exit 1
+fi
+
+exec "$PROJECT/.venv/bin/debate-tool" "$@"

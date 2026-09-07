@@ -60,6 +60,22 @@ Mid-debate, after each round, you can continue automatically, stop now, force
 another round even if the conductor judged the debate stalled, or interject a note
 that gets added to both debaters' context before the next round.
 
+### Running from anywhere (optional launcher)
+
+`bin/debate-tool` is a self-locating launcher: it finds the project root relative
+to its own path, activates the venv, and runs from the project directory (so
+`.env` and the default `config/` resolve) no matter where you call it from. Put it
+on your PATH once and `debate-tool` works from any directory:
+
+```bash
+ln -s "$(pwd)/bin/debate-tool" ~/.local/bin/debate-tool   # if ~/.local/bin is on your PATH
+```
+
+It follows symlinks to locate the repo, so the symlink above is enough; no editing
+needed. One caveat: since it runs from the project directory, a relative `--save`
+path lands in the project, not your current folder. Pass an absolute path (e.g.
+`--save ~/Desktop/debate.md`) to write elsewhere.
+
 ## Project layout
 
 ```
