@@ -7,7 +7,9 @@ import pytest
 from conftest import FakeAdapter
 
 from debate_tool import cli
-from debate_tool.engine.conductor import StallJudgment
+from debate_tool.engine.conductor import DisagreementMap, StallJudgment
+from debate_tool.engine.map import MapSkeleton
+from debate_tool.engine.session import DebateResult
 from debate_tool.engine.turns import Phase, Stance, Turn
 from debate_tool.persona_config import PersonaSet
 from debate_tool.providers.base import Message
@@ -259,3 +261,135 @@ def test_main_fails_fast_on_missing_api_keys(monkeypatch, capsys):
 
     assert exit_code == 1
     assert "Missing API key" in capsys.readouterr().err
+
+
+# --- render_transcript + --save --------------------------------------------------
+
+
+def _sample_result() -> DebateResult:
+    transcript = [
+        Turn(seat_id="skeptic", round_index=0, phase=None, text="skeptic opening take"),
+        Turn(seat_id="generator", round_index=0, phase=None, text="generator opening take"),
+        Turn(
+            seat_id="skeptic",
+            round_index=1,
+            phase=Phase.EXPAND,
+            text="skeptic argues with a * in it",
+            target="generator's point",
+            stance=Stance.REBUT,
+            uptake_ok=True,
+        ),
+        Turn(
+            seat_id="generator",
+            round_index=1,
+            phase=Phase.EXPAND,
+            text="generator extends",
+            target="skeptic's point",
+            stance=Stance.EXTEND,
+            uptake_ok=True,
+        ),
+    ]
+    dmap = DisagreementMap(
+        agreements_prose="they agreed on X",
+        splits_prose="they split on Y",
+        open_question_prose="what should you decide?",
+        skeleton=MapSkeleton(agreements=[], splits=[]),
+    )
+    return DebateResult(
+        transcript=transcript,
+        disagreement_map=dmap,
+        rounds_run=1,
+        stop_reason="stalled",
+        stall_judgments=[StallJudgment(stalled=True, reason="restating prior points")],
+        hook_events=[],
+    )
+
+
+def test_render_transcript_includes_all_sections_and_preserves_content():
+    text = cli.render_transcript(seed="my seed", problem="my reframed problem", result=_sample_result())
+
+    assert "# Debate transcript" in text
+    assert "- Seed: my seed" in text
+    assert "- Reframed problem: my reframed problem" in text
+    assert "- Stopped: stalled" in text
+    assert "## Independent takes" in text
+    assert "skeptic opening take" in text
+    assert "## Round 1 (expand)" in text
+    assert 'rebut, re: "generator\'s point"' in text
+    assert "skeptic argues with a * in it" in text  # content asterisk preserved
+    assert "Conductor's read: looks stalled. restating prior points" in text
+    assert "## Disagreement map" in text
+    assert "what should you decide?" in text
+
+
+def test_render_transcript_omits_reframe_line_when_problem_equals_seed():
+    text = cli.render_transcript(seed="same", problem="same", result=_sample_result())
+
+    assert "Reframed problem" not in text
+    assert "- Seed: same" in text
+
+
+def test_save_flag_writes_transcript_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+
+    anthropic_fake = FakeAdapter(
+        [
+            "FRAMING: the first framing\nFRAMING: a second framing",
+            "skeptic's opening take",
+            well_formed("generator's opening take", "rebut", "skeptic's round 1 argument"),
+            "STALLED: no\nREASON: still developing.",
+            "AGREEMENTS:\nagreed thing\n\nSPLITS:\nsplit thing\n\nOPEN QUESTION:\nwhat now?",
+        ]
+    )
+    openai_fake = FakeAdapter(
+        ["generator's opening take", well_formed("skeptic's opening take", "extend", "gen round 1")]
+    )
+    monkeypatch.setattr(
+        "debate_tool.engine.session.get_adapter",
+        lambda provider: {"anthropic": anthropic_fake, "openai": openai_fake}[provider],
+    )
+
+    out_path = tmp_path / "transcript.md"
+    exit_code = cli.main(
+        ["--seed", "Should we ship this?", "--auto", "--max-rounds", "1", "--save", str(out_path)]
+    )
+
+    assert exit_code == 0
+    assert out_path.exists()
+    saved = out_path.read_text()
+    assert "# Debate transcript" in saved
+    assert "the first framing" in saved  # ran on the reframed problem
+    assert "what now?" in saved
+
+
+def test_save_failure_does_not_crash_the_run(monkeypatch, capsys):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+
+    anthropic_fake = FakeAdapter(
+        [
+            "FRAMING: f1\nFRAMING: f2",
+            "skeptic's opening take",
+            well_formed("generator's opening take", "rebut", "skeptic round 1"),
+            "STALLED: no\nREASON: developing.",
+            "AGREEMENTS:\na\n\nSPLITS:\nb\n\nOPEN QUESTION:\nq?",
+        ]
+    )
+    openai_fake = FakeAdapter(
+        ["generator's opening take", well_formed("skeptic's opening take", "extend", "gen round 1")]
+    )
+    monkeypatch.setattr(
+        "debate_tool.engine.session.get_adapter",
+        lambda provider: {"anthropic": anthropic_fake, "openai": openai_fake}[provider],
+    )
+
+    # A path whose parent directory does not exist -> write fails, but the (already
+    # completed, on a live provider already paid-for) debate must still exit 0.
+    bad_path = "no-such-dir/nested/transcript.md"
+    exit_code = cli.main(["--seed", "x", "--auto", "--max-rounds", "1", "--save", bad_path])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Could not save transcript" in captured.err
+    assert "Disagreement map" in captured.out  # the result still printed

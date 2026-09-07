@@ -52,6 +52,9 @@ debate-tool --seed "Should we build a smart fridge?"
   (still shows progress; just skips the continue/stop/interject prompt).
 - `--max-rounds N`: hard cap on cross-critique rounds (default 8).
 - `--config-dir PATH`: use a different `config/` directory (default `config`).
+- `--save PATH`: write a clean Markdown transcript of the debate to `PATH`
+  (seed, reframed problem, every turn with its uptake tag, the conductor's
+  per-round read, and the disagreement map). Terminal output is unchanged.
 
 Mid-debate, after each round, you can continue automatically, stop now, force
 another round even if the conductor judged the debate stalled, or interject a note

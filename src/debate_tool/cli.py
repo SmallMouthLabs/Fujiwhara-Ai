@@ -141,6 +141,82 @@ def _print_result(result: DebateResult) -> None:
     print(_wrap(dmap.open_question_prose or "(none)", indent="  "))
 
 
+def render_transcript(seed: str, problem: str, result: DebateResult) -> str:
+    """Build a clean, self-contained transcript of a finished debate as Markdown.
+
+    Derived entirely from the DebateResult (plus the seed and the post-reframe
+    problem), not from intercepting what was printed, so a saved transcript is a
+    faithful record of what the debate actually produced regardless of terminal
+    formatting. `problem` is the reframed problem the debate actually ran on; it
+    equals `seed` when no reframe happened.
+    """
+    lines: list[str] = []
+    add = lines.append
+
+    add("# Debate transcript")
+    add("")
+    add(f"- Seed: {seed}")
+    if problem and problem != seed:
+        add(f"- Reframed problem: {problem}")
+    add(f"- Rounds run: {result.rounds_run}")
+    add(f"- Stopped: {result.stop_reason}")
+    add("")
+    add("## Problem")
+    add("")
+    add(problem or seed)
+
+    openings = [t for t in result.transcript if t.round_index == 0]
+    if openings:
+        add("")
+        add("## Independent takes")
+        for turn in openings:
+            add("")
+            add(f"### {turn.seat_id} (opening)")
+            add("")
+            add(turn.text)
+
+    for r in range(1, result.rounds_run + 1):
+        round_turns = [t for t in result.transcript if t.round_index == r]
+        if not round_turns:
+            continue
+        phase = round_turns[0].phase
+        add("")
+        add(f"## Round {r}" + (f" ({phase.value})" if phase is not None else ""))
+        for turn in round_turns:
+            tag = ""
+            if turn.stance is not None:
+                tag = f" ({turn.stance.value}, re: \"{turn.target or '(no target given)'}\")"
+                if not turn.uptake_ok:
+                    tag += " [did not follow the uptake format]"
+            add("")
+            add(f"### {turn.seat_id}{tag}")
+            add("")
+            add(turn.text)
+        if r - 1 < len(result.stall_judgments):
+            judgment = result.stall_judgments[r - 1]
+            verdict = "looks stalled" if judgment.stalled else "still moving"
+            add("")
+            add(f"> Conductor's read: {verdict}. {judgment.reason}")
+
+    dmap = result.disagreement_map
+    add("")
+    add("## Disagreement map")
+    add("")
+    add("### Agreements")
+    add("")
+    add(dmap.agreements_prose or "(none)")
+    add("")
+    add("### Splits")
+    add("")
+    add(dmap.splits_prose or "(none)")
+    add("")
+    add("### Open question")
+    add("")
+    add(dmap.open_question_prose or "(none)")
+
+    return "\n".join(lines) + "\n"
+
+
 def _positive_int(raw: str) -> int:
     """argparse type for a >=1 count, so `--max-rounds 0` (or negative) is rejected
     at parse time with a clean usage error instead of running a degenerate session
@@ -166,6 +242,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--auto", action="store_true", help="Never prompt between rounds; run fully automatically."
+    )
+    parser.add_argument(
+        "--save", metavar="PATH", help="Write a clean Markdown transcript of the debate to PATH."
     )
     return parser
 
@@ -214,10 +293,18 @@ def main(argv: list[str] | None = None) -> int:
     # framing), the same as run_round's interjection prompts are skipped.
     choose_framing = None if args.auto else _choose_framing
 
+    # Capture the post-reframe problem for --save, without changing what prints.
+    captured: dict[str, str] = {}
+
+    def on_event(name: str, payload: dict) -> None:
+        if name == "problem_set":
+            captured["problem"] = payload["problem"]
+        _on_event(name, payload)
+
     try:
         result = session.run(
             choose_framing=choose_framing,
-            on_event=_on_event,
+            on_event=on_event,
             on_round_end=_make_on_round_end(auto=args.auto),
         )
     except ProviderError as e:
@@ -225,6 +312,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     _print_result(result)
+
+    if args.save:
+        # The debate already ran (and, on a live provider, already cost money), so a
+        # write failure must not discard it: report the failure and still exit 0.
+        transcript = render_transcript(seed, captured.get("problem", seed), result)
+        try:
+            Path(args.save).write_text(transcript)
+            print(f"\nTranscript saved to {args.save}")
+        except OSError as e:
+            print(f"\nCould not save transcript to {args.save}: {e}", file=sys.stderr)
+
     return 0
 
 
